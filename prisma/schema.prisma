@@ -1,0 +1,279 @@
+// Prisma schema for Itinerary App
+// Database: PostgreSQL (Supabase)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// AUTH & USERS
+// ============================================================================
+
+model User {
+  id            String      @id @default(cuid())
+  email         String      @unique
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  vacations     Vacation[]
+
+  @@map("users")
+}
+
+// ============================================================================
+// VACATION & VERSIONING
+// ============================================================================
+
+model Vacation {
+  id                String      @id @default(cuid())
+  userId            String
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name              String
+  startDate         DateTime
+  endDate           DateTime
+  
+  // Versioning
+  version           Int         @default(1)
+  parentVacationId  String?     // null for originals, set for variants
+  variant           String?     // e.g., "food-focused", "museum-focused"
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relations
+  homestays         Homestay[]
+  days              Day[]
+  activities        Activity[]
+  versionHistory    VacationVersion[]
+
+  @@index([userId])
+  @@index([parentVacationId])
+  @@map("vacations")
+}
+
+model VacationVersion {
+  id                String      @id @default(cuid())
+  vacationId        String
+  vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
+
+  versionNumber     Int
+  snapshot          Json        // Full vacation state at this version (days, activities, homestays)
+  reason            String?     // e.g., "User reverted to earlier plan", "AI suggestions applied"
+  
+  createdAt         DateTime    @default(now())
+
+  @@unique([vacationId, versionNumber])
+  @@index([vacationId])
+  @@map("vacation_versions")
+}
+
+// ============================================================================
+// HOMESTAYS
+// ============================================================================
+
+model Homestay {
+  id                String      @id @default(cuid())
+  vacationId        String
+  vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
+
+  name              String
+  address           String
+  coordinates       Json?       // { lat: number, lng: number }
+  
+  checkInDate       DateTime
+  checkOutDate      DateTime
+  
+  notes             String?
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relations
+  days              Day[]
+
+  @@index([vacationId])
+  @@map("homestays")
+}
+
+// ============================================================================
+// DAYS
+// ============================================================================
+
+model Day {
+  id                String      @id @default(cuid())
+  vacationId        String
+  vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
+  
+  // Homestay is optional - can have days without a specific homestay
+  homestayId        String?
+  homestay          Homestay?   @relation(fields: [homestayId], references: [id], onDelete: SetNull)
+
+  date              DateTime    @db.Date
+  notes             String?
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relations
+  activities        Activity[]
+
+  @@unique([vacationId, date])
+  @@index([vacationId])
+  @@index([homestayId])
+  @@map("days")
+}
+
+// NOTE on Activity deletion:
+// When a user deletes an activity, it's permanently removed from the day.
+// Cascade delete is used: if a day is deleted, its activities are deleted.
+// If a homestay is deleted, days reference it with SetNull (homestay becomes null).
+// Activities can be duplicated - no uniqueness constraint prevents same activity on multiple days.
+
+// ============================================================================
+// ACTIVITIES
+// ============================================================================
+
+enum ActivityType {
+  RESTAURANT
+  SIGHTSEEING
+  ACTIVITY
+  TRAVEL
+}
+
+enum ActivityPriority {
+  MUST_HAVE
+  NICE_TO_HAVE
+  FLEXIBLE
+}
+
+enum TimeConstraint {
+  SPECIFIC_TIME    // Must happen at exact time
+  MORNING          // Morning preferred
+  AFTERNOON        // Afternoon preferred
+  EVENING          // Evening preferred
+  ANYTIME          // Any time works
+}
+
+enum ActivitySource {
+  USER_ENTERED
+  AI_SUGGESTED
+}
+
+model Activity {
+  id                String      @id @default(cuid())
+  dayId             String
+  day               Day         @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  
+  vacationId        String      // Denormalized for easier queries
+  vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
+
+  type              ActivityType
+  name              String
+  location          String      // User-friendly name/address
+  coordinates       Json?       // { lat: number, lng: number } for mapping
+  googlePlacesId    String?     // Reference to Google Places
+  
+  // Time information
+  // Activities are sorted by time, then name, then creation order
+  // No explicit ordering field - client sorts as needed
+  time              String?     // HH:mm format (null if flexible)
+  duration          Int?        // Duration in minutes
+  timeConstraint    TimeConstraint
+  
+  // Priority & source
+  priority          ActivityPriority
+  source            ActivitySource  @default(USER_ENTERED)
+  
+  notes             String?
+  
+  // Travel time (to next activity in order)
+  travelTimeTo      Json?       // { nextActivityId, minutes, distance, mode: TravelMode }
+  
+  // Future: cost tracking
+  estimatedCost     Float?
+  
+  // Metadata for future enrichment (ratings, photos, hours, etc.)
+  metadata          Json?       // {rating, openNow, hours, photos, ...}
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([dayId])
+  @@index([vacationId])
+  @@index([googlePlacesId])
+  @@map("activities")
+}
+
+// NOTE: 
+// - No uniqueness constraint on googlePlacesId - same restaurant can appear multiple times
+// - Deletion is hard-delete (permanent removal from day)
+// - No explicit order field - sort by time, then name, or as needed in UI
+
+enum TravelMode {
+  WALKING
+  TRANSIT
+  DRIVING
+}
+
+// ============================================================================
+// FUTURE: AI CONVERSATION HISTORY (optional, for learning)
+// ============================================================================
+
+// Uncomment when implementing conversation persistence
+/*
+model AIConversation {
+  id                String      @id @default(cuid())
+  vacationId        String
+  vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
+
+  messages          AIMessage[]
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([vacationId])
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id                String      @id @default(cuid())
+  conversationId    String
+  conversation      AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role              String      // "user" or "assistant"
+  content           String
+  
+  createdAt         DateTime    @default(now())
+
+  @@index([conversationId])
+  @@map("ai_messages")
+}
+*/
+
+// ============================================================================
+// FUTURE: VARIANTS & SHARING
+// ============================================================================
+
+// Uncomment when implementing sharing/collaboration
+/*
+model VacationShare {
+  id                String      @id @default(cuid())
+  vacationId        String
+  vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
+
+  shareToken        String      @unique // Unique token for sharing
+  sharedWithEmails  String[]    // Email addresses with access
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([vacationId])
+  @@map("vacation_shares")
+}
+*/
