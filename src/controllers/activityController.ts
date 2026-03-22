@@ -1,6 +1,6 @@
 // controllers/activityController.ts
 import { Response } from 'express';
-import { AuthRequest, ActivityInput, ActivityResponse } from '../types';
+import { AuthRequest, ActivityInput, ActivityResponse, Coordinates, Activity, ActivityWhereInput, ActivityUncheckedCreateInput, ActivityUncheckedUpdateInput } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
@@ -38,20 +38,40 @@ const toUndefined = (value: string | null | undefined): string | undefined => {
 };
 
 /**
- * Hard-deleted activities have `deletedAt` set. Prisma's inferred row type can
- * omit `deletedAt` even when the column exists at runtime; use a structural check.
+ * Hard-deleted activities have `deletedAt` set to a non-null Date.
  */
-const isActivityHardDeleted = (activity: object): boolean => {
-  if (!('deletedAt' in activity)) return false;
-  const v = (activity as { deletedAt?: Date | null }).deletedAt;
-  return Boolean(v);
+const isActivityHardDeleted = (activity: Activity): boolean => {
+  return activity.deletedAt !== null;
+};
+
+/**
+ * Safely cast a Prisma JsonValue to Coordinates.
+ * Prisma stores Json fields as JsonValue (which includes null), but our
+ * domain type is Coordinates | undefined. We cast only when the value is a
+ * non-null object — anything else (null, primitives) becomes undefined.
+ */
+const toCoordinates = (value: Prisma.JsonValue | null | undefined): Coordinates | undefined => {
+  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as unknown as Coordinates;
+};
+
+/**
+ * Safely cast a Prisma JsonValue to a plain record for metadata / travelTimeTo.
+ */
+const toRecord = (value: Prisma.JsonValue | null | undefined): Record<string, unknown> | undefined => {
+  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
 };
 
 // ============================================================================
 // HELPER: FORMAT ACTIVITY RESPONSE
 // ============================================================================
 
-const formatActivityResponse = (activity: any): ActivityResponse => {
+const formatActivityResponse = (activity: Activity): ActivityResponse => {
   return {
     id: activity.id,
     dayId: activity.dayId,
@@ -59,7 +79,7 @@ const formatActivityResponse = (activity: any): ActivityResponse => {
     type: activity.type,
     name: activity.name,
     location: activity.location,
-    coordinates: activity.coordinates,
+    coordinates: toCoordinates(activity.coordinates),
     googlePlacesId: activity.googlePlacesId,
     time: activity.time,
     duration: activity.duration,
@@ -69,7 +89,7 @@ const formatActivityResponse = (activity: any): ActivityResponse => {
     source: activity.source,
     notes: activity.notes,
     estimatedCost: activity.estimatedCost,
-    metadata: activity.metadata,
+    metadata: toRecord(activity.metadata),
     deletedAt: activity.deletedAt ? activity.deletedAt.toISOString() : null,
     createdAt: activity.createdAt.toISOString(),
     updatedAt: activity.updatedAt.toISOString(),
@@ -112,7 +132,7 @@ export const getActivities = async (req: AuthRequest, res: Response) => {
     }
 
     // Build where clause
-    let whereClause: any = {
+    let whereClause: ActivityWhereInput = {
       vacationId,
       deletedAt: null, // Exclude hard-deleted activities
     };
@@ -121,7 +141,7 @@ export const getActivities = async (req: AuthRequest, res: Response) => {
     if (req.query.dayId !== undefined) {
       const dayIdParam = req.query.dayId as string;
       if (dayIdParam === 'null') {
-        whereClause.dayId = null; // Unassigned pool
+        (whereClause as Record<string, unknown>).dayId = null; // Unassigned pool
       } else {
         whereClause.dayId = dayIdParam;
       }
@@ -131,7 +151,7 @@ export const getActivities = async (req: AuthRequest, res: Response) => {
     const activities = await prisma.activity.findMany({
       where: whereClause,
       orderBy: ACTIVITY_SORT_ORDER,
-    });
+    }) as unknown as Activity[];
 
     res.json(activities.map(formatActivityResponse));
   } catch (error) {
@@ -175,7 +195,7 @@ export const getActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    });
+    }) as unknown as Activity;
 
     if (!activity) {
       throw new AppError(404, 'Activity not found');
@@ -281,8 +301,8 @@ export const createActivity = async (req: AuthRequest, res: Response) => {
         notes: toUndefined(notes),
         googlePlacesId: toUndefined(googlePlacesId),
         source: 'USER_ENTERED',
-      } as Prisma.ActivityUncheckedCreateInput,
-    });
+      } as ActivityUncheckedCreateInput,
+    }) as unknown as Activity;
 
     res.status(201).json(formatActivityResponse(activity));
   } catch (error) {
@@ -340,7 +360,7 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    });
+    }) as unknown as Activity;
 
     if (!activity || activity.vacationId !== vacationId) {
       throw new AppError(404, 'Activity not found in this vacation');
@@ -368,7 +388,7 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     }
 
     // Build update data (only include provided fields)
-    const updateData: any = {};
+    const updateData: ActivityUncheckedUpdateInput = {};
     if (type !== undefined) updateData.type = type;
     if (name !== undefined) updateData.name = name;
     if (location !== undefined) updateData.location = location;
@@ -385,7 +405,7 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     const updatedActivity = await prisma.activity.update({
       where: { id: activityId },
       data: updateData,
-    });
+    }) as unknown as Activity;
 
     res.json(formatActivityResponse(updatedActivity));
   } catch (error) {
@@ -438,7 +458,7 @@ export const deleteActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    });
+    }) as unknown as Activity;
 
     if (!activity || activity.vacationId !== vacationId) {
       throw new AppError(404, 'Activity not found in this vacation');
@@ -448,13 +468,13 @@ export const deleteActivity = async (req: AuthRequest, res: Response) => {
       // Soft delete: move to unassigned pool
       await prisma.activity.update({
         where: { id: activityId },
-        data: { dayId: null } as unknown as Prisma.ActivityUncheckedUpdateInput,
+        data: { dayId: null } as ActivityUncheckedUpdateInput,
       });
     } else {
       // Hard delete: set deletedAt (AI feedback signal)
       await prisma.activity.update({
         where: { id: activityId },
-        data: { deletedAt: new Date() } as any, // as any due to Prisma type regeneration
+        data: { deletedAt: new Date() } as ActivityUncheckedUpdateInput,
       });
     }
 
@@ -508,7 +528,7 @@ export const moveActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    });
+    }) as unknown as Activity;
 
     if (!activity || activity.vacationId !== vacationId) {
       throw new AppError(404, 'Activity not found in this vacation');
@@ -532,8 +552,8 @@ export const moveActivity = async (req: AuthRequest, res: Response) => {
     // Move activity
     const updatedActivity = await prisma.activity.update({
       where: { id: activityId },
-      data: { dayId: toUndefined(dayId) },
-    });
+      data: { dayId: dayId === undefined ? undefined : (dayId ?? null) } as ActivityUncheckedUpdateInput,
+    }) as unknown as Activity;
 
     res.json(formatActivityResponse(updatedActivity));
   } catch (error) {
