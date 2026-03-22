@@ -84,7 +84,7 @@ model Homestay {
 
   name              String
   address           String
-  coordinates       Json?       // { lat: number, lng: number }
+  coordinates       Json?       // { lat: Float, lng: Float }
   
   checkInDate       DateTime
   checkOutDate      DateTime
@@ -129,11 +129,15 @@ model Day {
   @@map("days")
 }
 
-// NOTE on Activity deletion:
-// When a user deletes an activity, it's permanently removed from the day.
-// Cascade delete is used: if a day is deleted, its activities are deleted.
-// If a homestay is deleted, days reference it with SetNull (homestay becomes null).
-// Activities can be duplicated - no uniqueness constraint prevents same activity on multiple days.
+// NOTE on Activity lifecycle:
+// - dayId is nullable: null means activity is in the unassigned pool
+// - When a day is deleted: its activities move to unassigned pool (dayId → null)
+// - Hard delete: user explicitly deletes activity → sets deletedAt timestamp
+//   (signals to AI that this activity type is rejected)
+// - Soft delete: moving to unassigned pool (dayId → null, deletedAt remains null)
+//   (user may reassign to another day later)
+// - Query filters: exclude deletedAt activities by default, include with ?includeDeleted=true
+// - Activities can be duplicated - no uniqueness constraint prevents same activity on multiple days.
 
 // ============================================================================
 // ACTIVITIES
@@ -167,8 +171,10 @@ enum ActivitySource {
 
 model Activity {
   id                String      @id @default(cuid())
-  dayId             String
-  day               Day         @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  
+  // Day assignment (nullable = unassigned pool)
+  dayId             String?
+  day               Day?        @relation(fields: [dayId], references: [id], onDelete: SetNull)
   
   vacationId        String      // Denormalized for easier queries
   vacation          Vacation    @relation(fields: [vacationId], references: [id], onDelete: Cascade)
@@ -176,15 +182,18 @@ model Activity {
   type              ActivityType
   name              String
   location          String      // User-friendly name/address
-  coordinates       Json?       // { lat: number, lng: number } for mapping
+  coordinates       Json?       // { lat: Float, lng: Float }
   googlePlacesId    String?     // Reference to Google Places
   
   // Time information
-  // Activities are sorted by time, then name, then creation order
-  // No explicit ordering field - client sorts as needed
+  // Activities are sorted by:
+  // 1. time (if set, ascending)
+  // 2. position (manual order for unscheduled activities)
+  // 3. createdAt (fallback)
   time              String?     // HH:mm format (null if flexible)
   duration          Int?        // Duration in minutes
   timeConstraint    TimeConstraint
+  position          Int?        // Manual sort order within a day (for activities without specific time)
   
   // Priority & source
   priority          ActivityPriority
@@ -193,13 +202,17 @@ model Activity {
   notes             String?
   
   // Travel time (to next activity in order)
-  travelTimeTo      Json?       // { nextActivityId, minutes, distance, mode: TravelMode }
+  travelTimeTo      Json?       // { nextActivityId: String, minutes: Int, distance: Float, mode: "WALKING" | "TRANSIT" | "DRIVING" }
   
   // Future: cost tracking
   estimatedCost     Float?
   
   // Metadata for future enrichment (ratings, photos, hours, etc.)
   metadata          Json?       // {rating, openNow, hours, photos, ...}
+
+  // Soft delete for hard-deletion signal to AI
+  // null = active, non-null = hard-deleted by user (AI sees this as rejection)
+  deletedAt         DateTime?
 
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
@@ -208,17 +221,6 @@ model Activity {
   @@index([vacationId])
   @@index([googlePlacesId])
   @@map("activities")
-}
-
-// NOTE: 
-// - No uniqueness constraint on googlePlacesId - same restaurant can appear multiple times
-// - Deletion is hard-delete (permanent removal from day)
-// - No explicit order field - sort by time, then name, or as needed in UI
-
-enum TravelMode {
-  WALKING
-  TRANSIT
-  DRIVING
 }
 
 // ============================================================================

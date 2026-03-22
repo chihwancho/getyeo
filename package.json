@@ -7,6 +7,9 @@
     "dev": "nodemon --exec ts-node src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "postinstall": "prisma generate"
   },
   "keywords": [],
@@ -15,14 +18,23 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.0",
-    "express": "^5.2.1"
+    "axios": "^1.13.6",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.5.0",
     "nodemon": "^3.1.14",
     "prisma": "^6.19.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@vitest/coverage-v8": "^3.2.4",
+    "supertest": "^7.1.4",
+    "vitest": "^3.2.4"
   }
 }
