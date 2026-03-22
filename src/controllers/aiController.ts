@@ -5,7 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
 import { optimizeSchedule, suggestDay as suggestDayService, suggestVacation as suggestVacationService, DaySuggestion, DayPreferences, DayContext } from '../services/aiService';
 import { Activity } from '../types';
-import { getPlacesService } from '../services/googlePlacesService';
+import { getPlacesService, GooglePlacesService } from '../services/googlePlacesService';
 
 // Helper — reuse the same formatter as activityController to keep responses consistent
 import { Prisma } from '@prisma/client';
@@ -37,6 +37,34 @@ const formatActivity = (a: Activity): ActivityResponse => ({
   createdAt: a.createdAt.toISOString(),
   updatedAt: a.updatedAt.toISOString(),
 });
+
+
+/**
+ * Best-effort coordinate lookup for AI_SUGGESTED activities.
+ * Claude's googlePlacesId values are often hallucinated and 404 on getDetails.
+ * We use text search by name + location instead, which is reliable.
+ * Also stores the real googlePlacesId from the search result on the activity.
+ */
+const fetchPlaceCoordinates = async (
+  name: string,
+  location: string
+): Promise<{ coordinates: { lat: number; lng: number } | null; realPlaceId: string | null }> => {
+  try {
+    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+    if (!apiKey) return { coordinates: null, realPlaceId: null };
+    const service = new GooglePlacesService(apiKey);
+    const results = await service.searchText({ query: `${name} ${location}`, maxResultCount: 1 });
+    if (results.length > 0 && results[0].coordinates) {
+      return {
+        coordinates: results[0].coordinates,
+        realPlaceId: results[0].googlePlacesId,
+      };
+    }
+    return { coordinates: null, realPlaceId: null };
+  } catch {
+    return { coordinates: null, realPlaceId: null };
+  }
+};
 
 // ============================================================================
 // OPTIMIZE SCHEDULE — PREVIEW
@@ -471,7 +499,7 @@ export const applySuggestedDay = async (req: AuthRequest, res: Response) => {
 
   if (!req.user) throw new AppError(401, 'Unauthorized');
 
-  const { suggestions } = req.body as {
+  const { suggestions, warnings = [] } = req.body as {
     suggestions: Array<{
       source: 'ASSIGNED' | 'USER_POOL' | 'GOOGLE_PLACES';
       activityId?: string;
@@ -484,7 +512,9 @@ export const applySuggestedDay = async (req: AuthRequest, res: Response) => {
       duration: number | null;
       timeConstraint: string;
       priority: string;
+      reasoning?: string;
     }>;
+    warnings?: string[];
   };
 
   if (!Array.isArray(suggestions) || suggestions.length === 0) {
@@ -525,23 +555,21 @@ export const applySuggestedDay = async (req: AuthRequest, res: Response) => {
       const time = s.suggestedTime ?? undefined;
 
       if (s.source === 'ASSIGNED' && s.activityId) {
-        // Just update time + position
         return prisma.activity.update({
           where: { id: s.activityId },
-          data: { time, position },
+          data: { time, position, reasoning: s.reasoning ?? undefined },
         });
       }
 
       if (s.source === 'USER_POOL' && s.activityId) {
-        // Assign to this day + update time + position
         return prisma.activity.update({
           where: { id: s.activityId },
-          data: { dayId, time, position },
+          data: { dayId, time, position, reasoning: s.reasoning ?? undefined },
         });
       }
 
       if (s.source === 'GOOGLE_PLACES') {
-        // Create a new Activity record
+        const { coordinates, realPlaceId } = await fetchPlaceCoordinates(s.name, s.location);
         return prisma.activity.create({
           data: {
             vacationId,
@@ -549,18 +577,32 @@ export const applySuggestedDay = async (req: AuthRequest, res: Response) => {
             type: s.type as 'RESTAURANT' | 'SIGHTSEEING' | 'ACTIVITY' | 'TRAVEL',
             name: s.name,
             location: s.location,
-            googlePlacesId: s.googlePlacesId,
+            googlePlacesId: realPlaceId ?? s.googlePlacesId,
             time,
             duration: s.duration,
             position,
             timeConstraint: s.timeConstraint as 'SPECIFIC_TIME' | 'MORNING' | 'AFTERNOON' | 'EVENING' | 'ANYTIME',
             priority: s.priority as 'MUST_HAVE' | 'NICE_TO_HAVE' | 'FLEXIBLE',
             source: 'AI_SUGGESTED',
+            reasoning: s.reasoning ?? undefined,
+            ...(coordinates && { coordinates }),
           },
         });
       }
     })
   );
+
+  // Save day warnings and theme
+  const { warnings: bodyWarnings = [], theme: bodyTheme } = req.body;
+  if (bodyWarnings.length || bodyTheme) {
+    await prisma.day.update({
+      where: { id: dayId },
+      data: {
+        ...(bodyWarnings.length && { aiWarnings: bodyWarnings }),
+        ...(bodyTheme && { theme: bodyTheme }),
+      },
+    });
+  }
 
   // Return the final state of the day
   const updatedActivities = await prisma.activity.findMany({
@@ -810,6 +852,8 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
   const { days } = req.body as {
     days: Array<{
       dayId: string;
+      warnings?: string[];
+      theme?: string;
       suggestions: Array<{
         source: 'ASSIGNED' | 'USER_POOL' | 'GOOGLE_PLACES';
         activityId?: string;
@@ -822,6 +866,7 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
         duration: number | null;
         timeConstraint: string;
         priority: string;
+        reasoning?: string;
       }>;
     }>;
   };
@@ -871,21 +916,21 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
         if (s.source === 'ASSIGNED' && s.activityId) {
           return prisma.activity.update({
             where: { id: s.activityId },
-            data: { time, position },
+            data: { time, position, reasoning: (s as any).reasoning ?? undefined },
           });
         }
 
         if (s.source === 'USER_POOL' && s.activityId) {
-          // Skip if this pool activity was already assigned to an earlier day
           if (usedPoolIds.has(s.activityId)) return;
           usedPoolIds.add(s.activityId);
           return prisma.activity.update({
             where: { id: s.activityId },
-            data: { dayId, time, position },
+            data: { dayId, time, position, reasoning: (s as any).reasoning ?? undefined },
           });
         }
 
         if (s.source === 'GOOGLE_PLACES') {
+          const { coordinates, realPlaceId } = await fetchPlaceCoordinates(s.name, s.location);
           return prisma.activity.create({
             data: {
               vacationId,
@@ -893,18 +938,32 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
               type: s.type as 'RESTAURANT' | 'SIGHTSEEING' | 'ACTIVITY' | 'TRAVEL',
               name: s.name,
               location: s.location,
-              googlePlacesId: s.googlePlacesId,
+              googlePlacesId: realPlaceId ?? s.googlePlacesId,
               time,
               duration: s.duration,
               position,
               timeConstraint: s.timeConstraint as 'SPECIFIC_TIME' | 'MORNING' | 'AFTERNOON' | 'EVENING' | 'ANYTIME',
               priority: s.priority as 'MUST_HAVE' | 'NICE_TO_HAVE' | 'FLEXIBLE',
               source: 'AI_SUGGESTED',
+              reasoning: (s as any).reasoning ?? undefined,
+              ...(coordinates && { coordinates }),
             },
           });
         }
       })
     );
+
+    // Save day-level warnings and theme
+    const dayData = days.find((d: any) => d.dayId === dayId);
+    if (dayData?.warnings?.length || dayData?.theme) {
+      await prisma.day.update({
+        where: { id: dayId },
+        data: {
+          ...(dayData.warnings?.length && { aiWarnings: dayData.warnings }),
+          ...(dayData.theme && { theme: dayData.theme }),
+        },
+      });
+    }
 
     const updated = await prisma.activity.findMany({
       where: { dayId, deletedAt: null },

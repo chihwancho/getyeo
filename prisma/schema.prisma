@@ -116,6 +116,8 @@ model Day {
 
   date              DateTime    @db.Date
   notes             String?
+  aiWarnings        String[]    @default([])
+  theme             String?     // e.g. "Chapultepec Day", "Coyoacan & Xochimilco"
 
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
@@ -200,6 +202,7 @@ model Activity {
   source            ActivitySource  @default(USER_ENTERED)
   
   notes             String?
+  reasoning         String?     // AI-generated explanation for why this activity was suggested
   
   // Travel time (to next activity in order)
   travelTimeTo      Json?       // { nextActivityId: String, minutes: Int, distance: Float, mode: "WALKING" | "TRANSIT" | "DRIVING" }

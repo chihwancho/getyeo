@@ -15,6 +15,7 @@ import homestayRoutes from './homestays';
 import dayRoutes from './days';
 import activityRoutes from './activities';
 import aiRoutes from './ai';
+import exportRoutes from './export';
 
 const router = express.Router();
 
@@ -34,8 +35,11 @@ router.use('/:vacationId/days', dayRoutes);
 // Nested activities under vacation - MUST come before /:id routes
 router.use('/:vacationId/activities', activityRoutes);
 
-// Nested AI under vacation - MUST come before /:id routes
+// Nested AI under vacation
 router.use('/:vacationId/ai', aiRoutes);
+
+// Export endpoints
+router.use('/:vacationId/export', exportRoutes);
 
 // Variants - MUST come before /:id catch-all
 router.post('/:id/variants', asyncHandler(createVacationVariant));

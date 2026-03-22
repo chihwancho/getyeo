@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { AuthRequest, ActivityInput, ActivityResponse, Coordinates, Activity } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { Prisma } from '@prisma/client';
+import { GooglePlacesService } from '../services/googlePlacesService';
 import { prisma } from '../lib/prisma';
 
 // ============================================================================
@@ -65,6 +66,31 @@ const toRecord = (value: Prisma.JsonValue | null | undefined): Record<string, un
     return undefined;
   }
   return value as Record<string, unknown>;
+};
+
+
+/**
+ * Best-effort coordinate lookup for a googlePlacesId.
+ * Returns null silently on any failure — never blocks the main operation.
+ */
+const fetchPlaceCoordinates = async (
+  googlePlacesId: string
+): Promise<{ lat: number; lng: number } | null> => {
+  try {
+    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+    if (!apiKey) return null;
+    const service = new GooglePlacesService(apiKey);
+    // Try getDetails first (for valid IDs stored from real searches)
+    try {
+      const place = await service.getDetails(googlePlacesId);
+      if (place.coordinates) return place.coordinates;
+    } catch {
+      // fall through — ID may be invalid
+    }
+    return null;
+  } catch {
+    return null;
+  }
 };
 
 // ============================================================================
@@ -285,6 +311,11 @@ export const createActivity = async (req: AuthRequest, res: Response) => {
       throw new AppError(400, 'Time must be in HH:mm format');
     }
 
+    // Fetch coordinates if googlePlacesId provided (best-effort, fail silently)
+    const coordinates = googlePlacesId
+      ? await fetchPlaceCoordinates(googlePlacesId)
+      : null;
+
     // Create activity (unchecked input so nullable dayId is typed as string | null)
     const activity = await prisma.activity.create({
       data: {
@@ -301,6 +332,7 @@ export const createActivity = async (req: AuthRequest, res: Response) => {
         notes: toUndefined(notes),
         googlePlacesId: toUndefined(googlePlacesId),
         source: 'USER_ENTERED',
+        ...(coordinates && { coordinates }),
       } as Prisma.ActivityUncheckedCreateInput,
     });
 
@@ -400,6 +432,12 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     if (timeConstraint !== undefined) updateData.timeConstraint = timeConstraint;
     if (notes !== undefined) updateData.notes = notes;
     if (googlePlacesId !== undefined) updateData.googlePlacesId = googlePlacesId;
+
+    // Re-fetch coordinates if googlePlacesId is being set or changed
+    if (googlePlacesId) {
+      const coordinates = await fetchPlaceCoordinates(googlePlacesId);
+      if (coordinates) updateData.coordinates = coordinates;
+    }
 
     // Update activity
     const updatedActivity = await prisma.activity.update({

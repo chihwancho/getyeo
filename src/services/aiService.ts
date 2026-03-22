@@ -240,6 +240,7 @@ export interface DaySuggestion {
 
 export interface SuggestDayResult {
   status: 'success' | 'partial';
+  theme: string;
   suggestions: DaySuggestion[];
   warnings: string[];
   summary: string;
@@ -270,6 +271,7 @@ interface ClaudeDaySuggestion {
 }
 
 interface ClaudeSuggestResponse {
+  theme: string;
   suggestions: ClaudeDaySuggestion[];
   warnings: string[];
   summary: string;
@@ -367,6 +369,7 @@ ${groupByLocation ? '8. Group geographically close activities together to minimi
 
 OUTPUT FORMAT — respond with ONLY valid JSON, no markdown:
 {
+  "theme": "<short evocative day name, e.g. 'Chapultepec Day' or 'Coyoacan & Xochimilco'>",
   "suggestions": [
     {
       "source": "ASSIGNED" | "USER_POOL" | "GOOGLE_PLACES",
@@ -464,6 +467,7 @@ ${nearbyPlaces.length > 0 ? JSON.stringify(nearbyPlaces.map((p) => ({
 
   return {
     status,
+    theme: parsed.theme ?? '',
     suggestions: parsed.suggestions.map((s) => ({
       activityId: s.activityId,
       googlePlacesId: s.googlePlacesId,
@@ -513,6 +517,7 @@ export interface VacationSuggestOptions {
 export interface DaySuggestionPlan {
   dayId: string;
   date: string;
+  theme: string;        // e.g. "Chapultepec Day", "Coyoacan & Xochimilco"
   suggestions: DaySuggestion[];
   warnings: string[];
 }
@@ -528,6 +533,7 @@ interface ClaudeVacationResponse {
   days: Array<{
     dayId: string;
     date: string;
+    theme: string;
     suggestions: ClaudeDaySuggestionVacation[];
     warnings: string[];
   }>;
@@ -607,6 +613,7 @@ OUTPUT FORMAT — respond with ONLY valid JSON, no markdown:
     {
       "dayId": "<dayId>",
       "date": "<YYYY-MM-DD>",
+      "theme": "<short evocative day name, e.g. 'Chapultepec Day' or 'Centro Historico & Markets'>",
       "suggestions": [
         {
           "source": "ASSIGNED" | "USER_POOL" | "GOOGLE_PLACES",
@@ -728,6 +735,7 @@ ${poolActivities.length > 0
     return {
       dayId: d.dayId,
       date: d.date,
+      theme: d.theme ?? '',
       suggestions: d.suggestions.map((s) => ({
         activityId: s.activityId,
         googlePlacesId: s.googlePlacesId,
