@@ -14,6 +14,7 @@ import {
 import homestayRoutes from './homestays';
 import dayRoutes from './days';
 import activityRoutes from './activities';
+import aiRoutes from './ai';
 
 const router = express.Router();
 
@@ -32,6 +33,9 @@ router.use('/:vacationId/days', dayRoutes);
 
 // Nested activities under vacation - MUST come before /:id routes
 router.use('/:vacationId/activities', activityRoutes);
+
+// Nested AI under vacation - MUST come before /:id routes
+router.use('/:vacationId/ai', aiRoutes);
 
 // Variants - MUST come before /:id catch-all
 router.post('/:id/variants', asyncHandler(createVacationVariant));

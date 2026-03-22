@@ -1,6 +1,6 @@
 // controllers/activityController.ts
 import { Response } from 'express';
-import { AuthRequest, ActivityInput, ActivityResponse, Coordinates, Activity, ActivityWhereInput, ActivityUncheckedCreateInput, ActivityUncheckedUpdateInput } from '../types';
+import { AuthRequest, ActivityInput, ActivityResponse, Coordinates, Activity } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
@@ -132,7 +132,7 @@ export const getActivities = async (req: AuthRequest, res: Response) => {
     }
 
     // Build where clause
-    let whereClause: ActivityWhereInput = {
+    let whereClause: Prisma.ActivityWhereInput = {
       vacationId,
       deletedAt: null, // Exclude hard-deleted activities
     };
@@ -141,7 +141,7 @@ export const getActivities = async (req: AuthRequest, res: Response) => {
     if (req.query.dayId !== undefined) {
       const dayIdParam = req.query.dayId as string;
       if (dayIdParam === 'null') {
-        (whereClause as Record<string, unknown>).dayId = null; // Unassigned pool
+        whereClause.dayId = null; // Unassigned pool
       } else {
         whereClause.dayId = dayIdParam;
       }
@@ -151,7 +151,7 @@ export const getActivities = async (req: AuthRequest, res: Response) => {
     const activities = await prisma.activity.findMany({
       where: whereClause,
       orderBy: ACTIVITY_SORT_ORDER,
-    }) as unknown as Activity[];
+    });
 
     res.json(activities.map(formatActivityResponse));
   } catch (error) {
@@ -195,7 +195,7 @@ export const getActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    }) as unknown as Activity;
+    });
 
     if (!activity) {
       throw new AppError(404, 'Activity not found');
@@ -301,8 +301,8 @@ export const createActivity = async (req: AuthRequest, res: Response) => {
         notes: toUndefined(notes),
         googlePlacesId: toUndefined(googlePlacesId),
         source: 'USER_ENTERED',
-      } as ActivityUncheckedCreateInput,
-    }) as unknown as Activity;
+      } as Prisma.ActivityUncheckedCreateInput,
+    });
 
     res.status(201).json(formatActivityResponse(activity));
   } catch (error) {
@@ -360,7 +360,7 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    }) as unknown as Activity;
+    });
 
     if (!activity || activity.vacationId !== vacationId) {
       throw new AppError(404, 'Activity not found in this vacation');
@@ -388,7 +388,7 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     }
 
     // Build update data (only include provided fields)
-    const updateData: ActivityUncheckedUpdateInput = {};
+    const updateData: Prisma.ActivityUncheckedUpdateInput = {};
     if (type !== undefined) updateData.type = type;
     if (name !== undefined) updateData.name = name;
     if (location !== undefined) updateData.location = location;
@@ -405,7 +405,7 @@ export const updateActivity = async (req: AuthRequest, res: Response) => {
     const updatedActivity = await prisma.activity.update({
       where: { id: activityId },
       data: updateData,
-    }) as unknown as Activity;
+    });
 
     res.json(formatActivityResponse(updatedActivity));
   } catch (error) {
@@ -458,7 +458,7 @@ export const deleteActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    }) as unknown as Activity;
+    });
 
     if (!activity || activity.vacationId !== vacationId) {
       throw new AppError(404, 'Activity not found in this vacation');
@@ -468,13 +468,13 @@ export const deleteActivity = async (req: AuthRequest, res: Response) => {
       // Soft delete: move to unassigned pool
       await prisma.activity.update({
         where: { id: activityId },
-        data: { dayId: null } as ActivityUncheckedUpdateInput,
+        data: { dayId: null },
       });
     } else {
       // Hard delete: set deletedAt (AI feedback signal)
       await prisma.activity.update({
         where: { id: activityId },
-        data: { deletedAt: new Date() } as ActivityUncheckedUpdateInput,
+        data: { deletedAt: new Date() },
       });
     }
 
@@ -528,7 +528,7 @@ export const moveActivity = async (req: AuthRequest, res: Response) => {
     // Get activity
     const activity = await prisma.activity.findUnique({
       where: { id: activityId },
-    }) as unknown as Activity;
+    });
 
     if (!activity || activity.vacationId !== vacationId) {
       throw new AppError(404, 'Activity not found in this vacation');
@@ -552,8 +552,8 @@ export const moveActivity = async (req: AuthRequest, res: Response) => {
     // Move activity
     const updatedActivity = await prisma.activity.update({
       where: { id: activityId },
-      data: { dayId: dayId === undefined ? undefined : (dayId ?? null) } as ActivityUncheckedUpdateInput,
-    }) as unknown as Activity;
+      data: { dayId: dayId === undefined ? undefined : (dayId ?? null) },
+    });
 
     res.json(formatActivityResponse(updatedActivity));
   } catch (error) {

@@ -3,6 +3,42 @@ import { Response } from 'express';
 import { AuthRequest, HomestayInput, HomestayResponse } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { prisma } from '../lib/prisma';
+import { GooglePlacesService } from '../services/googlePlacesService';
+
+
+// ============================================================================
+// HELPER: GEOCODE ADDRESS
+// ============================================================================
+
+/**
+ * Best-effort geocoding using the Places text search API.
+ * Reuses the existing GOOGLE_PLACES_API_KEY — no separate Geocoding API needed.
+ * Returns null silently on any failure so homestay creation is never blocked.
+ */
+const geocodeAddress = async (address: string): Promise<{ lat: number; lng: number } | null> => {
+  try {
+    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+    if (!apiKey) {
+      console.warn('[geocodeAddress] GOOGLE_PLACES_API_KEY not set — skipping geocoding');
+      return null;
+    }
+
+    const service = new GooglePlacesService(apiKey);
+    const results = await service.searchText({ query: address, maxResultCount: 1 });
+
+    if (results.length === 0) {
+      console.warn('[geocodeAddress] No results for address:', address);
+      return null;
+    }
+
+    const { lat, lng } = results[0].coordinates;
+    console.log('[geocodeAddress] Success:', address, '->', { lat, lng });
+    return { lat, lng };
+  } catch (err) {
+    console.warn('[geocodeAddress] Failed for address:', address, err);
+    return null;
+  }
+};
 
 const formatHomestayResponse = (homestay: {
   id: string;
@@ -75,7 +111,16 @@ export const createHomestay = async (req: AuthRequest, res: Response) => {
       },
     });
 
-    res.status(201).json(formatHomestayResponse(homestay));
+    // Best-effort geocoding — fail silently so homestay creation is never blocked
+    const coordinates = await geocodeAddress(address);
+    const finalHomestay = coordinates
+      ? await prisma.homestay.update({
+          where: { id: homestay.id },
+          data: { coordinates },
+        })
+      : homestay;
+
+    res.status(201).json(formatHomestayResponse(finalHomestay));
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
@@ -215,6 +260,9 @@ export const updateHomestay = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // Re-geocode if address is changing
+    const newCoordinates = address ? await geocodeAddress(address) : null;
+
     const updated = await prisma.homestay.update({
       where: { id: homestayId },
       data: {
@@ -223,6 +271,7 @@ export const updateHomestay = async (req: AuthRequest, res: Response) => {
         ...(checkInDate && { checkInDate: new Date(checkInDate) }),
         ...(checkOutDate && { checkOutDate: new Date(checkOutDate) }),
         ...(notes !== undefined && { notes }),
+        ...(newCoordinates && { coordinates: newCoordinates }),
       },
     });
 

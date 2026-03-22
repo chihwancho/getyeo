@@ -4,6 +4,7 @@ import 'dotenv/config';
 import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './routes/auth';
 import vacationRoutes from './routes/vacation';
+import placesRoutes from './routes/places';
 
 const app = express();
 
@@ -24,8 +25,7 @@ app.get('/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/vacations', vacationRoutes);
-// TODO: Add places routes
-// TODO: Add AI routes
+app.use('/api/places', placesRoutes);
 
 // ============================================================================
 // ERROR HANDLING

@@ -1,36 +1,8 @@
 // types/index.ts
 import { Request } from 'express';
-import { Activity as PrismaActivity, Prisma } from '@prisma/client';
+import { Activity, Prisma } from '@prisma/client';
 
-// ============================================================================
-// PRISMA TYPE AUGMENTATION
-// ============================================================================
-//
-// `position` and `deletedAt` exist in schema.prisma but the generated Prisma
-// client is stale (needs `npx prisma generate`). These intersections add the
-// missing fields so TypeScript is happy until you can regenerate.
-// Remove this entire block after running `npx prisma generate`.
-//
-
-export type Activity = PrismaActivity & {
-  position: number | null;
-  deletedAt: Date | null;
-};
-
-export type ActivityWhereInput = Prisma.ActivityWhereInput & {
-  deletedAt?: Date | null;
-};
-
-export type ActivityUncheckedCreateInput = Prisma.ActivityUncheckedCreateInput & {
-  position?: number | null;
-  deletedAt?: Date | null;
-};
-
-export type ActivityUncheckedUpdateInput = Prisma.ActivityUncheckedUpdateInput & {
-  position?: number | null;
-  deletedAt?: Date | null;
-  dayId?: string | null | Prisma.NullableStringFieldUpdateOperationsInput;
-};
+export type { Activity };
 
 // ============================================================================
 // AUTH & USER
