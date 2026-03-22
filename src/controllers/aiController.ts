@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma';
 import { optimizeSchedule, suggestDay as suggestDayService, suggestVacation as suggestVacationService, DaySuggestion, DayPreferences, DayContext } from '../services/aiService';
 import { Activity } from '../types';
 import { getPlacesService, GooglePlacesService } from '../services/googlePlacesService';
+import { computeTravelTimes, ActivityWithCoords } from '../services/routesService';
 
 // Helper — reuse the same formatter as activityController to keep responses consistent
 import { Prisma } from '@prisma/client';
@@ -38,6 +39,48 @@ const formatActivity = (a: Activity): ActivityResponse => ({
   updatedAt: a.updatedAt.toISOString(),
 });
 
+
+/**
+ * After activities are saved, compute travel times between consecutive ordered
+ * activities and persist them. Fails silently — never blocks the apply response.
+ */
+const populateTravelTimes = async (
+  dayId: string,
+  vacationId: string
+): Promise<void> => {
+  try {
+    const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+    if (!apiKey) return;
+
+    // Fetch ordered activities for the day
+    const activities = await prisma.activity.findMany({
+      where: { dayId, deletedAt: null },
+      orderBy: [{ time: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    if (activities.length < 2) return;
+
+    const withCoords: ActivityWithCoords[] = activities.map((a) => ({
+      id: a.id,
+      coordinates: toCoordinates(a.coordinates) ?? null,
+    }));
+
+    const travelMap = await computeTravelTimes(withCoords, apiKey);
+    if (travelMap.size === 0) return;
+
+    // Persist travel times
+    await Promise.all(
+      Array.from(travelMap.entries()).map(([activityId, travelTime]) =>
+        prisma.activity.update({
+          where: { id: activityId },
+          data: { travelTimeTo: travelTime as any },
+        })
+      )
+    );
+  } catch (err) {
+    console.error('[populateTravelTimes] failed:', err);
+  }
+};
 
 /**
  * Best-effort coordinate lookup for AI_SUGGESTED activities.
@@ -969,6 +1012,9 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
       where: { dayId, deletedAt: null },
       orderBy: [{ time: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
     }) as unknown as Activity[];
+
+    // Populate travel times between consecutive activities (non-blocking)
+    populateTravelTimes(dayId, vacationId).catch(() => {});
 
     results.push(updated);
   }

@@ -13,6 +13,7 @@ export interface ActivityForPDF {
   source: string;
   notes: string | null;
   reasoning: string | null;
+  travelTimeTo?: { minutes: number; distance: number; mode: string } | null;
   coordinates?: Coordinates;
 }
 
@@ -241,10 +242,18 @@ export const generateItineraryPDF = async (vacation: VacationForPDF): Promise<Bu
 
         y += 8;
 
-        // Light separator between activities
+        // Travel time to next activity
         if (i < day.activities.length - 1) {
-          doc.moveTo(TIME_TEXT_X, y - 4)
-            .lineTo(MARGIN + CONTENT_WIDTH, y - 4)
+          const travel = a.travelTimeTo;
+          if (travel?.minutes) {
+            const modeIcon = travel.mode === 'WALKING' ? '🚶' : travel.mode === 'TRANSIT' ? '🚇' : '🚗';
+            const travelLabel = `${modeIcon}  ${travel.minutes} min${travel.distance ? `  ·  ${travel.distance} km` : ''}`;
+            doc.fillColor('#c4b5fd').fontSize(7).font('Helvetica')
+              .text(travelLabel, TIME_TEXT_X, y, { lineBreak: false });
+            y = doc.y + 4;
+          }
+          doc.moveTo(TIME_TEXT_X, y - 2)
+            .lineTo(MARGIN + CONTENT_WIDTH, y - 2)
             .lineWidth(0.3).stroke('#f3f4f6');
         }
       }

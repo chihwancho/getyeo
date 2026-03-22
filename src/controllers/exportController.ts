@@ -123,6 +123,7 @@ export const exportVacationPDF = async (req: AuthRequest, res: Response) => {
       source: a.source,
       notes: a.notes,
       reasoning: (a as any).reasoning ?? null,
+      travelTimeTo: (a as any).travelTimeTo ?? null,
       coordinates:
         toCoordinates(a.coordinates) ??
         coordMap.get(a.id),
