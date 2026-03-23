@@ -595,6 +595,12 @@ export const applySuggestedDay = async (req: AuthRequest, res: Response) => {
     },
   });
 
+  // Delete existing AI_SUGGESTED activities on this day before applying new ones
+  // This prevents duplicates when apply is called multiple times
+  await prisma.activity.deleteMany({
+    where: { dayId, source: 'AI_SUGGESTED', deletedAt: null },
+  });
+
   // Apply each suggestion by source type
   await Promise.all(
     suggestions.map(async (s, index) => {
@@ -957,6 +963,11 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
 
   for (const day of days) {
     const { dayId, suggestions } = day;
+
+    // Delete existing AI_SUGGESTED activities before applying new ones
+    await prisma.activity.deleteMany({
+      where: { dayId, source: 'AI_SUGGESTED', deletedAt: null },
+    });
 
     await Promise.all(
       suggestions.map(async (s, index) => {
