@@ -1,7 +1,4 @@
 // src/services/routesService.ts
-// Google Routes API — calculates transit travel times between consecutive activities
-// Called after apply to populate travelTimeTo on each activity
-
 import axios from 'axios';
 import { Coordinates } from '../types';
 
@@ -12,32 +9,26 @@ export interface TravelTime {
   mode: 'WALKING' | 'TRANSIT' | 'DRIVING';
 }
 
-interface RouteResult {
-  activityId: string;
-  travelTimeTo: TravelTime | null;
+export interface ActivityWithCoords {
+  id: string;
+  coordinates: Coordinates | null;
 }
 
-const ROUTES_API_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
+const ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
-// Compute travel time between two coordinates using Google Routes API
-async function computeTravelTime(
+async function computeRoute(
   origin: Coordinates,
   destination: Coordinates,
   apiKey: string,
-  mode: 'WALK' | 'TRANSIT' | 'DRIVE' = 'TRANSIT'
+  mode: 'WALK' | 'DRIVE'
 ): Promise<{ minutes: number; distanceKm: number } | null> {
   try {
     const res = await axios.post(
-      ROUTES_API_URL,
+      ROUTES_URL,
       {
-        origin: {
-          location: { latLng: { latitude: origin.lat, longitude: origin.lng } },
-        },
-        destination: {
-          location: { latLng: { latitude: destination.lat, longitude: destination.lng } },
-        },
+        origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
+        destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lng } } },
         travelMode: mode,
-        routingPreference: mode === 'TRANSIT' ? 'ROUTING_PREFERENCE_UNSPECIFIED' : undefined,
         computeAlternativeRoutes: false,
         languageCode: 'en-US',
         units: 'METRIC',
@@ -48,96 +39,76 @@ async function computeTravelTime(
           'X-Goog-Api-Key': apiKey,
           'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters',
         },
-        timeout: 5000,
+        timeout: 6000,
       }
     );
 
     const route = res.data?.routes?.[0];
     if (!route) return null;
 
-    const seconds = parseInt(route.duration?.replace('s', '') ?? '0', 10);
+    const seconds = parseInt((route.duration ?? '0s').replace('s', ''), 10);
     const meters = route.distanceMeters ?? 0;
 
     return {
       minutes: Math.round(seconds / 60),
       distanceKm: Math.round((meters / 1000) * 10) / 10,
     };
-  } catch {
+  } catch (err: any) {
+    console.error('[routesService] computeRoute failed:', err?.response?.data ?? err?.message);
     return null;
   }
 }
 
-// Choose best travel mode based on distance
-function chooseTravelMode(distanceKm: number): 'WALK' | 'TRANSIT' | 'DRIVE' {
-  if (distanceKm < 1.5) return 'WALK';
-  if (distanceKm < 20) return 'TRANSIT';
-  return 'DRIVE';
-}
-
-export interface ActivityWithCoords {
-  id: string;
-  coordinates: Coordinates | null;
-}
-
-// Compute travel times for a list of ordered activities and return a map of
-// activityId -> TravelTime for each consecutive pair that has coordinates.
 export async function computeTravelTimes(
   activities: ActivityWithCoords[],
   apiKey: string
 ): Promise<Map<string, TravelTime>> {
   const result = new Map<string, TravelTime>();
-
   if (!apiKey || activities.length < 2) return result;
 
-  // Process consecutive pairs in parallel (capped at 5 to avoid rate limits)
-  const pairs: Array<{ fromId: string; toId: string; from: Coordinates; to: Coordinates }> = [];
-
+  const pairs = [];
   for (let i = 0; i < activities.length - 1; i++) {
     const from = activities[i];
     const to = activities[i + 1];
     if (from.coordinates && to.coordinates) {
-      pairs.push({
-        fromId: from.id,
-        toId: to.id,
-        from: from.coordinates,
-        to: to.coordinates,
-      });
+      pairs.push({ fromId: from.id, toId: to.id, from: from.coordinates, to: to.coordinates });
     }
   }
 
-  // First pass — rough distance using DRIVE to pick travel mode
   await Promise.all(
     pairs.map(async (pair) => {
       try {
-        // Quick drive estimate for distance
-        const driveResult = await computeTravelTime(pair.from, pair.to, apiKey, 'DRIVE');
-        if (!driveResult) return;
-
-        const mode = chooseTravelMode(driveResult.distanceKm);
-
-        // Re-compute with chosen mode if different
-        let finalResult = driveResult;
-        let finalMode: 'WALKING' | 'TRANSIT' | 'DRIVING' = 'DRIVING';
-
-        if (mode === 'WALK') {
-          const walkResult = await computeTravelTime(pair.from, pair.to, apiKey, 'WALK');
-          if (walkResult) { finalResult = walkResult; finalMode = 'WALKING'; }
-        } else if (mode === 'TRANSIT') {
-          const transitResult = await computeTravelTime(pair.from, pair.to, apiKey, 'TRANSIT');
-          if (transitResult) { finalResult = transitResult; finalMode = 'TRANSIT'; }
+        // Try walking first — if under ~25 min it's walkable
+        const walk = await computeRoute(pair.from, pair.to, apiKey, 'WALK');
+        if (walk && walk.minutes <= 25) {
+          result.set(pair.fromId, {
+            nextActivityId: pair.toId,
+            minutes: walk.minutes,
+            distance: walk.distanceKm,
+            mode: 'WALKING',
+          });
+          return;
         }
 
-        result.set(pair.fromId, {
-          nextActivityId: pair.toId,
-          minutes: finalResult.minutes,
-          distance: finalResult.distanceKm,
-          mode: finalMode,
-        });
-      } catch {
-        // fail silently per pair
+        // Fall back to driving for time estimate (transit not supported without departure time)
+        const drive = await computeRoute(pair.from, pair.to, apiKey, 'DRIVE');
+        if (drive) {
+          // Heuristic: transit is roughly 1.5x driving time in most cities
+          const mode = drive.distanceKm < 30 ? 'TRANSIT' : 'DRIVING';
+          const minutes = mode === 'TRANSIT' ? Math.round(drive.minutes * 1.5) : drive.minutes;
+          result.set(pair.fromId, {
+            nextActivityId: pair.toId,
+            minutes,
+            distance: drive.distanceKm,
+            mode,
+          });
+        }
+      } catch (err: any) {
+        console.error('[routesService] pair failed:', err?.message);
       }
     })
   );
 
+  console.log(`[routesService] computed ${result.size}/${pairs.length} travel times`);
   return result;
 }
