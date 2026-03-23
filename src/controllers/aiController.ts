@@ -77,6 +77,7 @@ const populateTravelTimes = async (
         })
       )
     );
+    console.log(`[populateTravelTimes] persisted ${travelMap.size} travel times for day ${dayId}`);
   } catch (err) {
     console.error('[populateTravelTimes] failed:', err);
   }
