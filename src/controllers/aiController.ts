@@ -312,6 +312,9 @@ export const applyOptimizedDay = async (req: AuthRequest, res: Response) => {
     orderBy: [{ time: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
   });
 
+  // Populate travel times before responding (must await on serverless)
+  await populateTravelTimes(dayId, vacationId);
+
   res.json({
     success: true,
     versionCreated: nextVersionNumber,
@@ -652,6 +655,9 @@ export const applySuggestedDay = async (req: AuthRequest, res: Response) => {
     where: { dayId, deletedAt: null },
     orderBy: [{ time: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
   }) as unknown as Activity[];
+
+  // Populate travel times before responding (must await on serverless)
+  await populateTravelTimes(dayId, vacationId);
 
   res.json({
     success: true,
@@ -1013,8 +1019,8 @@ export const applyVacationSuggestion = async (req: AuthRequest, res: Response) =
       orderBy: [{ time: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
     }) as unknown as Activity[];
 
-    // Populate travel times between consecutive activities (non-blocking)
-    populateTravelTimes(dayId, vacationId).catch(() => {});
+    // Populate travel times before responding (must await on serverless)
+    await populateTravelTimes(dayId, vacationId);
 
     results.push(updated);
   }
