@@ -115,6 +115,7 @@ const formatActivityResponse = (activity: Activity): ActivityResponse => {
     source: activity.source,
     notes: activity.notes,
     estimatedCost: activity.estimatedCost,
+    travelTimeTo: toRecord(activity.travelTimeTo),
     metadata: toRecord(activity.metadata),
     deletedAt: activity.deletedAt ? activity.deletedAt.toISOString() : null,
     createdAt: activity.createdAt.toISOString(),

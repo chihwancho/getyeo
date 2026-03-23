@@ -97,6 +97,7 @@ export interface ActivityResponse {
   source: 'USER_ENTERED' | 'AI_SUGGESTED';
   notes: string | null;
   estimatedCost: number | null;
+  travelTimeTo?: Record<string, any> | null;
   metadata?: Record<string, any>;
   deletedAt: string | null; // null = active, non-null = hard-deleted
   createdAt: string;
